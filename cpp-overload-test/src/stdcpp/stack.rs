@@ -6,18 +6,19 @@
 
 use cpp::cpp;
 use splat_overload::overload;
-use std::ffi::{c_char, c_void};
+use std::ffi::{c_char, c_size_t, c_void};
 use std::marker::PhantomData;
 
 // C++ header includes
 cpp! {{
     #include <stack>
+    #include <cstddef>
 }}
 
 pub type T = std::ffi::c_int;
 
+/// A wrapper struct named StdStack that holds the returned c++ pointer.
 #[cfg_attr(not(test), expect(dead_code, reason = "only used in tests"))]
-//A wrapper struct named StdStack that holds the returned c++ pointer.
 pub struct StdStack(*mut c_void, PhantomData<T>);
 
 #[cfg_attr(not(test), expect(dead_code, reason = "only used in tests"))]
@@ -45,6 +46,40 @@ impl StdStack {
         };
         empty != 0
     }
+
+    fn push(&mut self, value: T) {
+        let slf: *mut c_void = self.0;
+        unsafe {
+            cpp!([slf as "std::stack<int>*", value as "int"]{
+                slf->push(value);
+            })
+        }
+    }
+
+    fn size(&self) -> c_size_t {
+        let slf = self.0 as *const c_void;
+
+        unsafe {
+            cpp!([slf as "const std::stack<int>*"] -> c_size_t as "size_t"{
+                return slf->size();
+            })
+        }
+    }
+
+    fn top_const(&self) -> Option<&T> {
+        let slf = self.0 as *const c_void;
+
+        unsafe {
+            cpp!([slf as "const std::stack<int>*"] -> Option<&T> as "const int*"{
+                //calling top() on an empty stack is undefined behaviour in cpp
+                if(slf->empty()){
+                    return nullptr;
+                }else{
+                    return &slf->top();
+                }
+            })
+        }
+    }
 }
 
 overload! {
@@ -60,4 +95,16 @@ overload! {
 pub fn test_stack() {
     let default_stack = StdStack::new();
     assert!(default_stack.is_empty());
+
+    //push, size, top_const
+
+    let mut stack = StdStack::new();
+    assert_eq!(stack.size(), 0);
+    assert_eq!(stack.top_const(), None);
+
+    stack.push(10);
+    stack.push(20);
+    assert!(!stack.is_empty());
+    assert_eq!(stack.size(), 2);
+    assert_eq!(stack.top_const(), Some(&20));
 }
