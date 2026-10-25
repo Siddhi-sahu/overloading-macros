@@ -13,6 +13,7 @@ use std::marker::PhantomData;
 cpp! {{
     #include <stack>
     #include <cstddef>
+    #include <utility>
 }}
 
 pub type T = std::ffi::c_int;
@@ -80,24 +81,55 @@ impl StdStack {
             })
         }
     }
+
+    fn copy_from(other: &StdStack) -> StdStack {
+        let other = other.0 as *const c_void;
+        let stack = unsafe {
+            cpp!([other as "const std::stack<int>*"] -> *mut c_void as "std::stack<int>*" {
+                const std::stack<int> other_ = *other;
+                return new std::stack<int>(other_);
+            })
+        };
+        StdStack(stack, PhantomData)
+    }
+
+    fn move_from(other: &mut StdStack) -> StdStack {
+        let other = other.0;
+        let stack = unsafe {
+            cpp!([other as "std::stack<int>*"] -> *mut c_void as "std::stack<int>*" {
+                std::stack<int> other_ = std::move(*other);
+                return new std::stack<int>(other_);
+            })
+        };
+        StdStack(stack, PhantomData)
+    }
 }
 
 overload! {
     impl StdStack {
-        // an empty stack
+        /// an empty stack
         pub fn new() -> StdStack {
             StdStack::default()
+        }
+        /// Clone stack items into a new stack from a shared stack reference
+        pub fn new(other: &StdStack) -> StdStack {
+            StdStack::copy_from(other)
+        }
+
+        /// Move stack items into a new stack from a mutable stack reference.
+        pub fn new(other: &mut StdStack) -> StdStack {
+            StdStack::move_from(other)
         }
     }
 }
 
+/// These tests show that the correct Rust and C++ overloads are being called.
 #[test]
 pub fn test_stack() {
     let default_stack = StdStack::new();
     assert!(default_stack.is_empty());
 
     //push, size, top_const
-
     let mut stack = StdStack::new();
     assert_eq!(stack.size(), 0);
     assert_eq!(stack.top_const(), None);
@@ -107,4 +139,28 @@ pub fn test_stack() {
     assert!(!stack.is_empty());
     assert_eq!(stack.size(), 2);
     assert_eq!(stack.top_const(), Some(&20));
+
+    //copy constructor
+    let mut original = StdStack::new();
+    original.push(13);
+    original.push(09);
+
+    let copy = StdStack::new(&original);
+    assert_eq!(copy.size(), 2);
+    assert_eq!(copy.top_const(), Some(&09));
+
+    //changing original will not change copy, because copy is independent
+    original.push(10);
+    assert_eq!(copy.size(), 2);
+    assert_eq!(original.size(), 3);
+
+    // move constructor
+    let mut real = StdStack::new();
+    real.push(10);
+    real.push(20);
+    real.push(30);
+
+    let moved_stack = StdStack::new(&mut real);
+    assert_eq!(moved_stack.size(), 3);
+    assert_eq!(moved_stack.top_const(), Some(&30));
 }
